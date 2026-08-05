@@ -37,7 +37,8 @@ npm start            # 等价于 node server.js
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
 | `WORK_DIR` | `claude` 子进程的工作目录，须为 `jrtc-faq` skill 与 Grafana MCP 可用之处 | 服务进程 cwd |
-| `PORT` | HTTP 端口（仅绑定 127.0.0.1） | `3000` |
+| `HOST` | HTTP Listen IP | '127.0.0.1'|
+| `PORT` | HTTP Listen PORT | `3000` |
 | `SESSION_FILE` | 会话映射持久化路径 | `./sessions.json` |
 | `MODEL` | 传给 `claude --model`，用于降本，如 `claude-sonnet-4-6` | 不指定 |
 | `ANTHROPIC_API_KEY` | 未通过 `claude` 登录时需要 | — |
@@ -45,7 +46,7 @@ npm start            # 等价于 node server.js
 示例：
 
 ```bash
-WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 PORT=8080 node server.js
+WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 HOST=0.0.0.0 PORT=8080 node server.js
 ```
 
 ## 架构
