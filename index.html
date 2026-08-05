@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code Web</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height:100%; }
+  body { margin:0; background:#1a1b1e; color:#e6e6e6;
+         font:14px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+  #log { padding:16px; padding-bottom:120px; min-height:100vh; box-sizing:border-box; }
+
+  /* 底部固定输入区 */
+  #bar { position:fixed; left:0; right:0; bottom:0; z-index:10;
+         padding:10px 16px 12px;
+         background:#111214; border-top:1px solid #2a2c30;
+         box-shadow:0 -4px 16px rgba(0,0,0,.3); }
+  #row { display:flex; gap:8px; align-items:flex-end; }
+
+  /* 自动增高的多行输入框 */
+  #prompt { flex:1; padding:10px 12px; border-radius:10px; border:1px solid #333;
+            background:#222; color:#eee; resize:none; overflow-y:auto;
+            font:14px/1.6 "SF Mono", Menlo, Consolas, monospace;
+            min-height:24px; max-height:40vh; box-sizing:border-box; }
+  #prompt:focus { outline:none; border-color:#4f7cff; }
+
+  button { padding:10px 18px; border-radius:10px; border:0; background:#4f7cff;
+           color:#fff; cursor:pointer; font:inherit; white-space:nowrap; }
+  button:disabled { background:#555; cursor:not-allowed; }
+  #newBtn { background:#3a3f47; padding:10px 14px; }
+  .hint { color:#5a6068; font-size:12px; margin-top:6px;
+          font-family:"SF Mono",Menlo,Consolas,monospace; }
+
+  .turn { margin:0 0 18px; }
+  .prompt-line { color:#6f7680; font-family:"SF Mono",Menlo,Consolas,monospace;
+                 margin-bottom:8px; white-space:pre-wrap; }
+  .prompt-line b { color:#8fa9ff; }
+
+  .md { color:#e6e6e6; }
+  .md h1,.md h2,.md h3 { color:#dfe6ff; margin:16px 0 8px; line-height:1.4; }
+  .md h1 { font-size:20px; border-bottom:1px solid #333; padding-bottom:4px; }
+  .md h2 { font-size:18px; }
+  .md h3 { font-size:16px; }
+  .md p { margin:8px 0; }
+  .md ul,.md ol { margin:8px 0; padding-left:22px; }
+  .md li { margin:3px 0; }
+  .md strong { color:#fff; }
+  .md code { background:#2a2c30; padding:1px 6px; border-radius:4px;
+             font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; color:#7ec8ff; }
+  .md pre { background:#0e0f11; border:1px solid #2a2c30; border-radius:8px;
+            padding:12px; overflow:auto; }
+  .md pre code { background:none; padding:0; color:#d6dae0; }
+  .md a { color:#4f7cff; }
+  .md blockquote { border-left:3px solid #3a4252; margin:8px 0; padding:2px 12px; color:#9aa4b2; }
+  .md table { border-collapse:collapse; margin:10px 0; }
+  .md th,.md td { border:1px solid #3a4252; padding:6px 12px; text-align:left; }
+  .md th { background:#20242c; color:#dfe6ff; }
+  .md tr:nth-child(even) td { background:#1e2126; }
+
+  .tool { color:#7ec8ff; background:#20304a; border-radius:6px;
+          padding:6px 10px; margin:8px 0; display:block;
+          font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; }
+  .tool-result { color:#9aa4b2; border-left:3px solid #3a4252;
+                 padding:4px 10px; margin:4px 0 10px; display:block;
+                 max-height:160px; overflow:auto; white-space:pre-wrap;
+                 font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; }
+  .meta { color:#6f7680; font-family:"SF Mono",Menlo,Consolas,monospace; }
+  .err { color:#ff7b72; white-space:pre-wrap; }
+  .cursor::after { content:'\2589'; animation: blink 1s step-start infinite; color:#8fa9ff; }
+  @keyframes blink { 50% { opacity:0; } }
+</style>
+</head>
+<body>
+<div id="log"></div>
+
+<div id="bar">
+  <div id="row">
+    <button id="newBtn" onclick="newSession()" title="新建会话（清空上下文）">＋</button>
+    <textarea id="prompt" rows="1"
+      placeholder="描述会议问题，例如：Jack Chen 最近的会议质量怎么样？"></textarea>
+    <button id="btn" onclick="run()">查询</button>
+  </div>
+  <div class="hint">Enter 发送 · Shift+Enter 换行 · ＋ 新建会话</div>
+</div>
+
+<script>
+marked.setOptions({ breaks: true, gfm: true });
+
+const log = document.getElementById('log');
+const btn = document.getElementById('btn');
+const promptEl = document.getElementById('prompt');
+
+// 会话 id：sessionStorage —— 每个标签页独立，刷新不丢
+let sessionId = sessionStorage.getItem('sid');
+if (!sessionId) {
+  sessionId = 'tab-' + (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  sessionStorage.setItem('sid', sessionId);
+}
+
+let es = null, mdBuffer = '', mdEl = null;
+
+/* ---------- 输入框：自动增高 ---------- */
+function autoGrow() {
+  promptEl.style.height = 'auto';
+  promptEl.style.height = Math.min(promptEl.scrollHeight, window.innerHeight * 0.4) + 'px';
+  document.getElementById('log').style.paddingBottom =
+    (document.getElementById('bar').offsetHeight + 24) + 'px';
+}
+promptEl.addEventListener('input', autoGrow);
+
+/* ---------- 键盘：Enter 发送 / Shift+Enter 换行 ---------- */
+promptEl.addEventListener('keydown', (e) => {
+  // 中文输入法组合中不拦截
+  if (e.isComposing) return;
+  if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    run();
+  }
+  // Shift+Enter / Cmd+Enter / Ctrl+Enter → 默认行为（换行）
+});
+
+/* ---------- 渲染工具 ---------- */
+function scrollDown() { window.scrollTo(0, document.body.scrollHeight); }
+function renderMd() {
+  if (!mdEl) return;
+  mdEl.innerHTML = DOMPurify.sanitize(marked.parse(mdBuffer));
+  scrollDown();
+}
+
+function newSession() {
+  if (es) { es.close(); es = null; btn.disabled = false; }
+  sessionId = 'tab-' + (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  sessionStorage.setItem('sid', sessionId);
+  log.innerHTML = '';
+  const m = document.createElement('div');
+  m.className = 'meta';
+  m.textContent = '— 已开启新会话 —';
+  log.appendChild(m);
+  promptEl.focus();
+}
+
+function run() {
+  const p = promptEl.value.trim();
+  if (!p) return;
+  if (es) es.close();
+
+  promptEl.value = '';
+  autoGrow();               // 清空后收回单行高度
+  promptEl.focus();
+  btn.disabled = true;
+
+  const turn = document.createElement('div');
+  turn.className = 'turn';
+  const pl = document.createElement('div');
+  pl.className = 'prompt-line';
+  pl.innerHTML = '<b>$</b> ';
+  pl.appendChild(document.createTextNode(p));   // 多行 prompt 靠 white-space:pre-wrap 保留换行
+  turn.appendChild(pl);
+  log.appendChild(turn);
+
+  mdBuffer = ''; mdEl = null;
+  scrollDown();
+
+  es = new EventSource('/api/run?prompt=' + encodeURIComponent(p) + '&session=' + sessionId);
+
+  es.addEventListener('init', e => {
+    const d = JSON.parse(e.data);
+    const m = document.createElement('div');
+    m.className = 'meta'; m.textContent = '[model: ' + d.model + ']';
+    turn.appendChild(m); scrollDown();
+  });
+
+  es.addEventListener('delta', e => {
+    const d = JSON.parse(e.data);
+    if (!mdEl) { mdEl = document.createElement('div'); mdEl.className = 'md'; turn.appendChild(mdEl); }
+    mdBuffer += d.text;
+    renderMd();
+  });
+
+  es.addEventListener('tool', e => {
+    const d = JSON.parse(e.data);
+    mdEl = null; mdBuffer = '';
+    const el = document.createElement('div');
+    el.className = 'tool';
+    el.textContent = '\uD83D\uDD27 ' + d.name + '  ' + JSON.stringify(d.input).slice(0, 300);
+    turn.appendChild(el); scrollDown();
+  });
+
+  es.addEventListener('tool_result', e => {
+    const el = document.createElement('div');
+    el.className = 'tool-result'; el.textContent = JSON.parse(e.data).text;
+    turn.appendChild(el); scrollDown();
+  });
+
+  es.addEventListener('stderr', e => {
+    const el = document.createElement('div');
+    el.className = 'err'; el.textContent = JSON.parse(e.data).text;
+    turn.appendChild(el); scrollDown();
+  });
+
+  es.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    renderMd();
+    const el = document.createElement('div');
+    el.className = d.is_error ? 'err' : 'meta';
+    el.textContent = '[完成 ' + (d.duration_ms/1000).toFixed(1) + 's | $' + (d.cost_usd||0).toFixed(4) + ']';
+    turn.appendChild(el); scrollDown();
+  });
+
+  es.addEventListener('exit', () => { es.close(); es = null; btn.disabled = false; promptEl.focus(); });
+  es.onerror = () => { btn.disabled = false; };
+}
+
+autoGrow();
+promptEl.focus();
+</script>
+</body>
+</html>
