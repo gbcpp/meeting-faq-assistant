@@ -105,18 +105,22 @@ app.get('/api/run', (req, res) => {
       try { msg = JSON.parse(line); } catch { continue; }
 
       switch (msg.type) {
-        case 'system': // 只处理 init 子类型，其它 system 事件（hook/状态）忽略
+        case 'system': // 处理 init 与 api_retry，其它 system 事件（hook/状态）忽略
           if (msg.subtype === 'init') {
             if (clientSession) {
               sessions.set(clientSession, { sid: msg.session_id, ts: Date.now() });
               persistSessions();
             }
             send('init', { session_id: msg.session_id, model: msg.model });
+          } else if (msg.subtype === 'api_retry') {
+            // 认证过期/网络故障时 CLI 会静默重试，转发出来避免页面只剩转圈
+            send('stderr', { text: `API 重试 ${msg.attempt}/${msg.max_retries}: ${msg.error_status || ''} ${msg.error || ''}` });
           }
           break;
         case 'stream_event': { // token 级增量（--include-partial-messages）
           const delta = msg.event?.delta;
           if (delta?.type === 'text_delta') send('delta', { text: delta.text });
+          else if (delta?.type === 'thinking_delta') send('thinking', {}); // 仅作信号，前端用于维持"思考中"状态
           break;
         }
         case 'assistant': { // 完整 assistant 消息（含工具调用）
@@ -156,9 +160,10 @@ app.get('/api/run', (req, res) => {
   req.on('close', () => child.kill('SIGTERM')); // 浏览器断开就杀进程
 });
 
+const HOST = process.env.HOST || '127.0.0.1';
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`open http://127.0.0.1:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`open http://${HOST}:${PORT}`);
   console.log(`work dir : ${process.env.WORK_DIR || process.cwd()}`);
   console.log(`sessions : ${sessions.size} 条已加载 (${SESSION_FILE})`);
 });

@@ -72,6 +72,14 @@
   .err { color:#ff7b72; white-space:pre-wrap; }
   .cursor::after { content:'\2589'; animation: blink 1s step-start infinite; color:#8fa9ff; }
   @keyframes blink { 50% { opacity:0; } }
+
+  /* 等待模型输出时的转圈指示 */
+  .spin { display:flex; align-items:center; gap:8px; color:#8a93a3; margin:8px 0;
+          font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; }
+  .spin::before { content:''; width:13px; height:13px; border-radius:50%; flex:none;
+          border:2px solid #3a4252; border-top-color:#8fa9ff;
+          animation:spin-rot .8s linear infinite; }
+  @keyframes spin-rot { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -147,6 +155,7 @@ function run() {
   const p = promptEl.value.trim();
   if (!p) return;
   if (es) es.close();
+  document.querySelectorAll('.spin').forEach(el => el.remove()); // 清掉上一轮可能残留的转圈
 
   promptEl.value = '';
   autoGrow();               // 清空后收回单行高度
@@ -163,6 +172,13 @@ function run() {
   log.appendChild(turn);
 
   mdBuffer = ''; mdEl = null;
+
+  // \u7B49\u5F85\u6307\u793A\uFF1AappendChild \u4F1A\u628A\u5DF2\u5B58\u5728\u7684\u8282\u70B9\u79FB\u5230\u672B\u5C3E\uFF0C\u4FDD\u8BC1\u8F6C\u5708\u59CB\u7EC8\u5728\u6700\u4E0B\u65B9
+  const spin = document.createElement('div');
+  spin.className = 'spin';
+  const showSpin = (label) => { spin.textContent = label; spin.style.display = 'flex'; turn.appendChild(spin); scrollDown(); };
+  const hideSpin = () => { spin.style.display = 'none'; };
+  showSpin('\u601D\u8003\u4E2D\u2026');
   scrollDown();
 
   es = new EventSource('/api/run?prompt=' + encodeURIComponent(p) + '&session=' + sessionId);
@@ -171,10 +187,13 @@ function run() {
     const d = JSON.parse(e.data);
     const m = document.createElement('div');
     m.className = 'meta'; m.textContent = '[model: ' + d.model + ']';
-    turn.appendChild(m); scrollDown();
+    turn.appendChild(m); turn.appendChild(spin); scrollDown();
   });
 
+  es.addEventListener('thinking', () => showSpin('\u601D\u8003\u4E2D\u2026'));
+
   es.addEventListener('delta', e => {
+    hideSpin();
     const d = JSON.parse(e.data);
     if (!mdEl) { mdEl = document.createElement('div'); mdEl.className = 'md'; turn.appendChild(mdEl); }
     mdBuffer += d.text;
@@ -187,13 +206,15 @@ function run() {
     const el = document.createElement('div');
     el.className = 'tool';
     el.textContent = '\uD83D\uDD27 ' + d.name + '  ' + JSON.stringify(d.input).slice(0, 300);
-    turn.appendChild(el); scrollDown();
+    turn.appendChild(el);
+    showSpin('\u5DE5\u5177\u6267\u884C\u4E2D\u2026');
   });
 
   es.addEventListener('tool_result', e => {
     const el = document.createElement('div');
     el.className = 'tool-result'; el.textContent = JSON.parse(e.data).text;
-    turn.appendChild(el); scrollDown();
+    turn.appendChild(el);
+    showSpin('\u601D\u8003\u4E2D\u2026');
   });
 
   es.addEventListener('stderr', e => {
@@ -204,6 +225,7 @@ function run() {
 
   es.addEventListener('done', e => {
     const d = JSON.parse(e.data);
+    spin.remove();
     renderMd();
     const el = document.createElement('div');
     el.className = d.is_error ? 'err' : 'meta';
@@ -211,8 +233,8 @@ function run() {
     turn.appendChild(el); scrollDown();
   });
 
-  es.addEventListener('exit', () => { es.close(); es = null; btn.disabled = false; promptEl.focus(); });
-  es.onerror = () => { btn.disabled = false; };
+  es.addEventListener('exit', () => { spin.remove(); es.close(); es = null; btn.disabled = false; promptEl.focus(); });
+  es.onerror = () => { spin.remove(); btn.disabled = false; };
 }
 
 autoGrow();
