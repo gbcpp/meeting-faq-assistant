@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eddie 最近一次会议质量排查</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.7; color: #222; max-width: 900px; margin: 32px auto; padding: 0 20px; }
+  h1 { font-size: 22px; border-bottom: 2px solid #2b6cb0; padding-bottom: 8px; }
+  h2 { font-size: 17px; margin-top: 28px; color: #2b6cb0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+  th { background: #f3f6fb; }
+  .good { color: #2f855a; font-weight: 600; }
+  .bad { color: #c53030; font-weight: 600; }
+  .summary { background: #f7fafc; border-left: 4px solid #2b6cb0; padding: 12px 16px; margin: 16px 0; }
+  .meta { color: #666; font-size: 13px; }
+  a.btn { display: inline-block; margin: 6px 12px 6px 0; padding: 8px 14px; background: #2b6cb0; color: #fff; text-decoration: none; border-radius: 6px; font-size: 14px; }
+  a.btn:hover { background: #23507f; }
+  code { background: #edf2f7; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>Eddie 最近一次会议质量排查</h1>
+  <p class="meta">环境: stage (appid 20002) · userName: <code>Eddie</code> · userId: <code>b844dd6fb57b48be</code> · 房间: <code>9213536537</code>(发布方为 <code>Eddie-3 / 63539993d81c940a</code>)· 时间均为北京时间</p>
+
+  <div class="summary">
+    <b>结论:</b> Eddie 最近一次会议(今天 8-07,房间 <code>9213536537</code>)<span class="good">质量良好</span>——今天这段卡顿窗口全部 ≤ 4%,音频、屏共均正常。该长期房里唯一一次真卡发生在<b>昨天 8-06 15:46 开场那半分钟</b>,经客户端核实为<span class="bad">真实视频冻结</span>,根因是下行接收丢包骤升至 72%、传输时延涨到 470ms 的链路瞬时劣化,<b>与带宽无关</b>。
+  </div>
+
+  <h2>1. 最近一场(今天 8-07)各流质量</h2>
+  <table>
+    <tr><th>流</th><th>累计卡顿率</th><th>峰值窗口</th><th>判定</th></tr>
+    <tr><td>video 普通</td><td>0.39%</td><td>今天窗口 ≤ 4%</td><td class="good">好</td></tr>
+    <tr><td>audio</td><td>0.18%</td><td>4.36%</td><td class="good">好</td></tr>
+    <tr><td>video 屏共</td><td>0.16%</td><td>1.84%</td><td class="good">好</td></tr>
+  </table>
+
+  <h2>2. 唯一真卡事件(昨天 8-06 15:46 开场)</h2>
+  <p>video 普通流累计卡顿率仅 0.39%,但存在一个 18.16% 的峰值窗口。经客户端 <code>remote_video</code> 核实为真实冻结:</p>
+  <table>
+    <tr><th>时刻</th><th>卡顿</th><th>解码帧率</th><th>判定</th></tr>
+    <tr><td>15:45:45–15:46:15</td><td>0</td><td>稳定 25 fps</td><td class="good">正常</td></tr>
+    <tr><td>15:46:17</td><td>2086 ms</td><td>—</td><td class="bad">卡顿</td></tr>
+    <tr><td>15:46:37</td><td>1143 ms</td><td>掉到 5 fps</td><td class="bad">卡顿</td></tr>
+    <tr><td>15:46:41</td><td>4594 ms</td><td>5 fps</td><td class="bad">严重卡顿</td></tr>
+    <tr><td>15:46:45–47</td><td>—</td><td>0 fps(冻结)</td><td class="bad">冻结</td></tr>
+  </table>
+
+  <p>客户端 <code>connection_counter</code> 传输层同一时刻——根因所在:</p>
+  <table>
+    <tr><th>时刻</th><th>下行丢包 receiver_loss</th><th>传输时延 ptt90</th><th>评估带宽 bwe</th></tr>
+    <tr><td>15:45:45–15:46:13(基线)</td><td>1–3%</td><td>80–140 ms</td><td>9 Mbps</td></tr>
+    <tr><td>15:46:15 起</td><td>10% → 28%</td><td>150 → 190 ms</td><td>9 Mbps</td></tr>
+    <tr><td>15:46:37–47</td><td class="bad">34% → 62% → 72%</td><td class="bad">285 → 470 ms</td><td>10–13 Mbps</td></tr>
+  </table>
+
+  <h2>3. 根因</h2>
+  <p>昨天 8-06 15:46 开场时,Eddie 下行接收链路突发严重丢包(<code>receiver_loss</code> 从 1–3% 冲到 <b>72%</b>),伴随传输时延 <code>ptt90</code> 从 ~150ms 涨到 <b>470ms</b>,视频从 25fps 掉到 0fps 冻结,客户端累计记录约 8 秒真实卡顿。<b>非带宽问题</b>——评估带宽全程 9–13Mbps 充足;基线 RTT ~75ms 路径较长(疑似跨区),开场瞬间链路丢包/时延骤劣是直接原因,持续约半分钟后恢复。</p>
+
+  <h2>4. Grafana 面板链接</h2>
+  <a class="btn" href="https://grafana.jaco.live/d/ef9865b5qxwcgb/vip-user-e7bd91-e7bb9c-e79c8b-e69dbf?orgId=14&var-vip_uids=b844dd6fb57b48be&var-room_filter=9213536537&from=1786002240000&to=1786002600000" target="_blank">① 真卡时段(8-06 15:44–15:50)</a>
+  <a class="btn" href="https://grafana.jaco.live/d/ef9865b5qxwcgb/vip-user-e7bd91-e7bb9c-e79c8b-e69dbf?orgId=14&var-vip_uids=b844dd6fb57b48be&var-room_filter=9213536537&from=1786002000000&to=1786089660000" target="_blank">② 房间全程(8-06 15:40 → 8-07 16:01)</a>
+</body>
+</html>

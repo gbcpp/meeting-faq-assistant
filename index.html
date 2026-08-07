@@ -63,11 +63,14 @@
 
   .tool { color:#7ec8ff; background:#20304a; border-radius:6px;
           padding:6px 10px; margin:8px 0; display:block;
-          font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; }
+          font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px;
+          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+  .tool.open { white-space:pre-wrap; overflow:visible; text-overflow:clip; }
   .tool-result { color:#9aa4b2; border-left:3px solid #3a4252;
                  padding:4px 10px; margin:4px 0 10px; display:block;
-                 max-height:160px; overflow:auto; white-space:pre-wrap;
-                 font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; }
+                 font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px;
+                 white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+  .tool-result.open { white-space:pre-wrap; overflow:visible; text-overflow:clip; max-height:none; }
   .meta { color:#6f7680; font-family:"SF Mono",Menlo,Consolas,monospace; }
   .err { color:#ff7b72; white-space:pre-wrap; }
   .cursor::after { content:'\2589'; animation: blink 1s step-start infinite; color:#8fa9ff; }
@@ -205,14 +208,19 @@ function run() {
     mdEl = null; mdBuffer = '';
     const el = document.createElement('div');
     el.className = 'tool';
-    el.textContent = '\uD83D\uDD27 ' + d.name + '  ' + JSON.stringify(d.input).slice(0, 300);
+    el.title = '\u70B9\u51FB\u5C55\u5F00/\u6536\u8D77';
+    el.textContent = '\uD83D\uDD27 ' + d.name + '\n' + JSON.stringify(d.input, null, 2);
+    el.addEventListener('click', () => el.classList.toggle('open'));
     turn.appendChild(el);
     showSpin('\u5DE5\u5177\u6267\u884C\u4E2D\u2026');
   });
 
   es.addEventListener('tool_result', e => {
     const el = document.createElement('div');
-    el.className = 'tool-result'; el.textContent = JSON.parse(e.data).text;
+    el.className = 'tool-result';
+    el.title = '\u70B9\u51FB\u5C55\u5F00/\u6536\u8D77';
+    el.textContent = JSON.parse(e.data).text;
+    el.addEventListener('click', () => el.classList.toggle('open'));
     turn.appendChild(el);
     showSpin('\u601D\u8003\u4E2D\u2026');
   });

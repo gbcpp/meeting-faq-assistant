@@ -93,3 +93,47 @@ WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 HOST=0.0.0.0 PORT=8080
 | `server.js` | Express 服务 + SSE 推送 + `claude` 子进程管理 + 会话表 |
 | `index.html` | 单页前端，无框架，负责渲染与交互 |
 | `sessions.json` | 会话映射持久化文件（自动生成） |
+
+
+## 启动
+
+## 启动 mcp server
+
+```bash
+export GRAFANA_URL=https://grafana.jaco.live
+export GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_xxxxxxxxxxx
+
+chmod +x mcp-grafana
+
+./mcp-grafana -t streamable-http --address 10.93.0.26:54788 -allowed-hosts 10.93.0.26:54788
+```
+
+## claude 添加 mcp server
+
+```bash
+claude mcp add --transport http grafana-remote http://10.93.0.26:54788/mcp --scope user
+```
+
+## claude 添加 skill
+
+```bash
+mkdir -p $HOME/.claude/skills/jrtc-faq
+ln -s $PWD/SKILL.md  $HOME/.claude/skills/jrtc-faq/SKILL.md
+```
+
+## 启动 http server 提供下载服务
+
+```bash
+mkdir -p  $PWD/shared
+cd $PWD/shared
+python3 -m http.server 8081
+```
+
+## 启动 Assistant 服务
+
+```bash
+npm instal express
+
+HOST=10.93.0.26 PORT=8080 node server.js
+```
+
