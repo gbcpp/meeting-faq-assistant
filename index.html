@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,85 +7,184 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 <style>
-  :root { color-scheme: dark; }
+  :root, [data-theme="light"] {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --fg: #1a1b1e;
+    --fg-muted: #6b7280;
+    --fg-soft: #8b929c;
+    --bar-bg: #ffffff;
+    --bar-border: #e2e5ea;
+    --bar-shadow: 0 -4px 16px rgba(0,0,0,.06);
+    --input-bg: #f4f5f7;
+    --input-border: #d0d5dd;
+    --input-fg: #1a1b1e;
+    --accent: #3b6cf5;
+    --accent-soft: #4f7cff;
+    --btn-secondary: #e8eaee;
+    --btn-secondary-fg: #3a3f47;
+    --btn-disabled: #c5cad3;
+    --md-heading: #1a2332;
+    --md-border: #dde1e8;
+    --md-strong: #111;
+    --code-bg: #eef0f4;
+    --code-fg: #1a6aa8;
+    --pre-bg: #f0f2f5;
+    --pre-border: #dde1e8;
+    --pre-code: #2a2e35;
+    --quote-border: #c5cad3;
+    --quote-fg: #6b7280;
+    --table-border: #c5cad3;
+    --table-th-bg: #eef0f4;
+    --table-th-fg: #1a2332;
+    --table-alt: #f7f8fa;
+    --tool-fg: #1a5a9e;
+    --tool-bg: #e4eef9;
+    --tool-result-fg: #5a6570;
+    --tool-result-border: #c5cad3;
+    --err: #d1242f;
+    --spin-fg: #6b7280;
+    --spin-ring: #c5cad3;
+    --spin-top: #3b6cf5;
+    --theme-btn-bg: #ffffff;
+    --theme-btn-border: #d0d5dd;
+    --theme-btn-fg: #3a3f47;
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1a1b1e;
+    --fg: #e6e6e6;
+    --fg-muted: #6f7680;
+    --fg-soft: #5a6068;
+    --bar-bg: #111214;
+    --bar-border: #2a2c30;
+    --bar-shadow: 0 -4px 16px rgba(0,0,0,.3);
+    --input-bg: #222;
+    --input-border: #333;
+    --input-fg: #eee;
+    --accent: #4f7cff;
+    --accent-soft: #8fa9ff;
+    --btn-secondary: #3a3f47;
+    --btn-secondary-fg: #fff;
+    --btn-disabled: #555;
+    --md-heading: #dfe6ff;
+    --md-border: #333;
+    --md-strong: #fff;
+    --code-bg: #2a2c30;
+    --code-fg: #7ec8ff;
+    --pre-bg: #0e0f11;
+    --pre-border: #2a2c30;
+    --pre-code: #d6dae0;
+    --quote-border: #3a4252;
+    --quote-fg: #9aa4b2;
+    --table-border: #3a4252;
+    --table-th-bg: #20242c;
+    --table-th-fg: #dfe6ff;
+    --table-alt: #1e2126;
+    --tool-fg: #7ec8ff;
+    --tool-bg: #20304a;
+    --tool-result-fg: #9aa4b2;
+    --tool-result-border: #3a4252;
+    --err: #ff7b72;
+    --spin-fg: #8a93a3;
+    --spin-ring: #3a4252;
+    --spin-top: #8fa9ff;
+    --theme-btn-bg: #222;
+    --theme-btn-border: #3a4252;
+    --theme-btn-fg: #e6e6e6;
+  }
+
   html, body { height:100%; }
-  body { margin:0; background:#1a1b1e; color:#e6e6e6;
+  body { margin:0; background:var(--bg); color:var(--fg);
          font:14px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+  #themeBtn { position:fixed; top:12px; right:16px; z-index:20;
+              width:36px; height:36px; padding:0; border-radius:50%;
+              border:1px solid var(--theme-btn-border); background:var(--theme-btn-bg);
+              color:var(--theme-btn-fg); cursor:pointer; font-size:16px; line-height:1;
+              box-shadow:0 2px 8px rgba(0,0,0,.08); }
+  #themeBtn:hover { border-color:var(--accent); }
+  #themeBtn .icon-dark { display:none; }
+  [data-theme="dark"] #themeBtn .icon-light { display:none; }
+  [data-theme="dark"] #themeBtn .icon-dark { display:inline; }
 
   #log { padding:16px; padding-bottom:120px; min-height:100vh; box-sizing:border-box; }
 
   /* 底部固定输入区 */
   #bar { position:fixed; left:0; right:0; bottom:0; z-index:10;
          padding:10px 16px 12px;
-         background:#111214; border-top:1px solid #2a2c30;
-         box-shadow:0 -4px 16px rgba(0,0,0,.3); }
+         background:var(--bar-bg); border-top:1px solid var(--bar-border);
+         box-shadow:var(--bar-shadow); }
   #row { display:flex; gap:8px; align-items:flex-end; }
 
   /* 自动增高的多行输入框 */
-  #prompt { flex:1; padding:10px 12px; border-radius:10px; border:1px solid #333;
-            background:#222; color:#eee; resize:none; overflow-y:auto;
+  #prompt { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--input-border);
+            background:var(--input-bg); color:var(--input-fg); resize:none; overflow-y:auto;
             font:14px/1.6 "SF Mono", Menlo, Consolas, monospace;
             min-height:24px; max-height:40vh; box-sizing:border-box; }
-  #prompt:focus { outline:none; border-color:#4f7cff; }
+  #prompt:focus { outline:none; border-color:var(--accent); }
 
-  button { padding:10px 18px; border-radius:10px; border:0; background:#4f7cff;
+  button { padding:10px 18px; border-radius:10px; border:0; background:var(--accent);
            color:#fff; cursor:pointer; font:inherit; white-space:nowrap; }
-  button:disabled { background:#555; cursor:not-allowed; }
-  #newBtn { background:#3a3f47; padding:10px 14px; }
-  .hint { color:#5a6068; font-size:12px; margin-top:6px;
+  button:disabled { background:var(--btn-disabled); cursor:not-allowed; }
+  #newBtn { background:var(--btn-secondary); color:var(--btn-secondary-fg); padding:10px 14px; }
+  .hint { color:var(--fg-soft); font-size:12px; margin-top:6px;
           font-family:"SF Mono",Menlo,Consolas,monospace; }
 
   .turn { margin:0 0 18px; }
-  .prompt-line { color:#6f7680; font-family:"SF Mono",Menlo,Consolas,monospace;
+  .prompt-line { color:var(--fg-muted); font-family:"SF Mono",Menlo,Consolas,monospace;
                  margin-bottom:8px; white-space:pre-wrap; }
-  .prompt-line b { color:#8fa9ff; }
+  .prompt-line b { color:var(--accent-soft); }
 
-  .md { color:#e6e6e6; }
-  .md h1,.md h2,.md h3 { color:#dfe6ff; margin:16px 0 8px; line-height:1.4; }
-  .md h1 { font-size:20px; border-bottom:1px solid #333; padding-bottom:4px; }
+  .md { color:var(--fg); }
+  .md h1,.md h2,.md h3 { color:var(--md-heading); margin:16px 0 8px; line-height:1.4; }
+  .md h1 { font-size:20px; border-bottom:1px solid var(--md-border); padding-bottom:4px; }
   .md h2 { font-size:18px; }
   .md h3 { font-size:16px; }
   .md p { margin:8px 0; }
   .md ul,.md ol { margin:8px 0; padding-left:22px; }
   .md li { margin:3px 0; }
-  .md strong { color:#fff; }
-  .md code { background:#2a2c30; padding:1px 6px; border-radius:4px;
-             font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; color:#7ec8ff; }
-  .md pre { background:#0e0f11; border:1px solid #2a2c30; border-radius:8px;
+  .md strong { color:var(--md-strong); }
+  .md code { background:var(--code-bg); padding:1px 6px; border-radius:4px;
+             font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; color:var(--code-fg); }
+  .md pre { background:var(--pre-bg); border:1px solid var(--pre-border); border-radius:8px;
             padding:12px; overflow:auto; }
-  .md pre code { background:none; padding:0; color:#d6dae0; }
-  .md a { color:#4f7cff; }
-  .md blockquote { border-left:3px solid #3a4252; margin:8px 0; padding:2px 12px; color:#9aa4b2; }
+  .md pre code { background:none; padding:0; color:var(--pre-code); }
+  .md a { color:var(--accent); }
+  .md blockquote { border-left:3px solid var(--quote-border); margin:8px 0; padding:2px 12px; color:var(--quote-fg); }
   .md table { border-collapse:collapse; margin:10px 0; }
-  .md th,.md td { border:1px solid #3a4252; padding:6px 12px; text-align:left; }
-  .md th { background:#20242c; color:#dfe6ff; }
-  .md tr:nth-child(even) td { background:#1e2126; }
+  .md th,.md td { border:1px solid var(--table-border); padding:6px 12px; text-align:left; }
+  .md th { background:var(--table-th-bg); color:var(--table-th-fg); }
+  .md tr:nth-child(even) td { background:var(--table-alt); }
 
-  .tool { color:#7ec8ff; background:#20304a; border-radius:6px;
+  .tool { color:var(--tool-fg); background:var(--tool-bg); border-radius:6px;
           padding:6px 10px; margin:8px 0; display:block;
           font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px;
           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   .tool.open { white-space:pre-wrap; overflow:visible; text-overflow:clip; }
-  .tool-result { color:#9aa4b2; border-left:3px solid #3a4252;
+  .tool-result { color:var(--tool-result-fg); border-left:3px solid var(--tool-result-border);
                  padding:4px 10px; margin:4px 0 10px; display:block;
                  font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px;
                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   .tool-result.open { white-space:pre-wrap; overflow:visible; text-overflow:clip; max-height:none; }
-  .meta { color:#6f7680; font-family:"SF Mono",Menlo,Consolas,monospace; }
-  .err { color:#ff7b72; white-space:pre-wrap; }
-  .cursor::after { content:'\2589'; animation: blink 1s step-start infinite; color:#8fa9ff; }
+  .meta { color:var(--fg-muted); font-family:"SF Mono",Menlo,Consolas,monospace; }
+  .err { color:var(--err); white-space:pre-wrap; }
+  .cursor::after { content:'\2589'; animation: blink 1s step-start infinite; color:var(--accent-soft); }
   @keyframes blink { 50% { opacity:0; } }
 
   /* 等待模型输出时的转圈指示 */
-  .spin { display:flex; align-items:center; gap:8px; color:#8a93a3; margin:8px 0;
+  .spin { display:flex; align-items:center; gap:8px; color:var(--spin-fg); margin:8px 0;
           font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; }
   .spin::before { content:''; width:13px; height:13px; border-radius:50%; flex:none;
-          border:2px solid #3a4252; border-top-color:#8fa9ff;
+          border:2px solid var(--spin-ring); border-top-color:var(--spin-top);
           animation:spin-rot .8s linear infinite; }
   @keyframes spin-rot { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
+<button id="themeBtn" type="button" title="切换亮/暗色模式" aria-label="切换亮/暗色模式">
+  <span class="icon-light">☀</span><span class="icon-dark">☾</span>
+</button>
 <div id="log"></div>
 
 <div id="bar">
@@ -104,6 +203,18 @@ marked.setOptions({ breaks: true, gfm: true });
 const log = document.getElementById('log');
 const btn = document.getElementById('btn');
 const promptEl = document.getElementById('prompt');
+const themeBtn = document.getElementById('themeBtn');
+
+/* ---------- 主题：默认 light，记住选择 ---------- */
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('theme', theme);
+  themeBtn.title = theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式';
+}
+applyTheme(localStorage.getItem('theme') === 'light' ? 'light' : 'dark');
+themeBtn.addEventListener('click', () => {
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+});
 
 // 会话 id：sessionStorage —— 每个标签页独立，刷新不丢
 let sessionId = sessionStorage.getItem('sid');
