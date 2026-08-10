@@ -136,7 +136,7 @@ Content-Type: application/x-ndjson
 | kSignalUnPubReq | kSignalUnPubRes | 取消发布流 |
 | kSignalSubReq | kSignalSubRes | 订阅流 |
 | kSignalUnSubReq | kSignalUnSubRes | 取消订阅流 |
-| kSignalSwitchSimulStreamSubReq | kSignalSwitchSimulStreamSubRes | 切换 Simulcast 订阅流 |
+| kSignalSwitchSimulStreamSubReq | kSignalSwitchSimulStreamSubRes | 切换订阅大小流，由上层自动或者手动进行触发切换 |
 | kSignalFullSync | kSignalFullSyncS2C | 路由全量同步（含 S2C） |
 | kSignalIncrSync | kSignalIncrSyncS2C | 路由增量同步（含 S2C） |
 | kSignalWebWsReconnReq | kSignalWebWsReconnRes | Web 信令 WS 重连 |
