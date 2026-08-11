@@ -49,6 +49,12 @@
     --theme-btn-bg: #ffffff;
     --theme-btn-border: #d0d5dd;
     --theme-btn-fg: #3a3f47;
+    --prompt-bg: #e8eefb;
+    --prompt-border: #3b6cf5;
+    --prompt-fg: #1a2332;
+    --prompt-label-bg: #3b6cf5;
+    --prompt-label-fg: #fff;
+    --reply-label-fg: #6b7280;
   }
   [data-theme="dark"] {
     color-scheme: dark;
@@ -92,6 +98,12 @@
     --theme-btn-bg: #222;
     --theme-btn-border: #3a4252;
     --theme-btn-fg: #e6e6e6;
+    --prompt-bg: #1e2a3d;
+    --prompt-border: #4f7cff;
+    --prompt-fg: #e8edf5;
+    --prompt-label-bg: #4f7cff;
+    --prompt-label-fg: #fff;
+    --reply-label-fg: #8a93a3;
   }
 
   html, body { height:100%; }
@@ -131,10 +143,20 @@
   .hint { color:var(--fg-soft); font-size:12px; margin-top:6px;
           font-family:"SF Mono",Menlo,Consolas,monospace; }
 
-  .turn { margin:0 0 18px; }
-  .prompt-line { color:var(--fg-muted); font-family:"SF Mono",Menlo,Consolas,monospace;
-                 margin-bottom:8px; white-space:pre-wrap; }
-  .prompt-line b { color:var(--accent-soft); }
+  .turn { margin:0 0 24px; }
+  .prompt-line { background:var(--prompt-bg); border-left:3px solid var(--prompt-border);
+                 border-radius:0 8px 8px 0; padding:10px 14px; margin-bottom:14px;
+                 white-space:pre-wrap; }
+  .prompt-label { display:inline-block; font-size:11px; font-weight:600; letter-spacing:.04em;
+                  text-transform:uppercase; padding:2px 8px; border-radius:4px; margin-bottom:6px;
+                  background:var(--prompt-label-bg); color:var(--prompt-label-fg);
+                  font-family:"SF Mono",Menlo,Consolas,monospace; }
+  .prompt-text { color:var(--prompt-fg); font-family:"SF Mono",Menlo,Consolas,monospace;
+                 line-height:1.6; }
+  .reply { margin-top:4px; }
+  .reply-label { display:block; font-size:11px; font-weight:600; letter-spacing:.04em;
+                 text-transform:uppercase; color:var(--reply-label-fg); margin-bottom:6px;
+                 font-family:"SF Mono",Menlo,Consolas,monospace; }
 
   .md { color:var(--fg); }
   .md h1,.md h2,.md h3 { color:var(--md-heading); margin:16px 0 8px; line-height:1.4; }
@@ -280,8 +302,14 @@ function run() {
   turn.className = 'turn';
   const pl = document.createElement('div');
   pl.className = 'prompt-line';
-  pl.innerHTML = '<b>$</b> ';
-  pl.appendChild(document.createTextNode(p));   // 多行 prompt 靠 white-space:pre-wrap 保留换行
+  const label = document.createElement('div');
+  label.className = 'prompt-label';
+  label.textContent = 'You';
+  const text = document.createElement('div');
+  text.className = 'prompt-text';
+  text.textContent = p;
+  pl.appendChild(label);
+  pl.appendChild(text);
   turn.appendChild(pl);
   log.appendChild(turn);
 
@@ -309,7 +337,18 @@ function run() {
   es.addEventListener('delta', e => {
     hideSpin();
     const d = JSON.parse(e.data);
-    if (!mdEl) { mdEl = document.createElement('div'); mdEl.className = 'md'; turn.appendChild(mdEl); }
+    if (!mdEl) {
+      const reply = document.createElement('div');
+      reply.className = 'reply';
+      const rl = document.createElement('div');
+      rl.className = 'reply-label';
+      rl.textContent = 'Assistant';
+      mdEl = document.createElement('div');
+      mdEl.className = 'md';
+      reply.appendChild(rl);
+      reply.appendChild(mdEl);
+      turn.appendChild(reply);
+    }
     mdBuffer += d.text;
     renderMd();
   });

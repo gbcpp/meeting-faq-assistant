@@ -157,7 +157,7 @@ Content-Type: application/x-ndjson
 | sub_type | 用途 |
 | --- | --- |
 | kDuplicateRoom | 重复进房 / 房间冲突 |
-| kUserConnected | 用户已连接 |
+| kUserConnected | 用户连接成功，如果在会议中出现说明用户断开重连了,可以作为用户断开的证据 |
 | kUserDisconnected | 用户已断开 |
 | kPeerConnecting | Peer 建连中 |
 | kPeerConnected | Peer 建连成功 |
@@ -252,7 +252,7 @@ Content-Type: application/x-ndjson
   不能写成「卡顿率不高 / 体验良好」。** 累计率与峰值窗口要同时出现在结论里。
 - 拿到峰值时刻后，用 `stall_duration_ms > 0` 逐窗口列出时间线定位到秒级，
   再去**该流发布方 uid** 的上行指标找根因（Server 侧 `rx_loss` / `jitter90` / `tx_rtt_ms`）——
-  卡顿方自己的链路往往是健康的，问题多在对端上行或跨境链路。
+  卡顿方自己的链路可能是健康的，那么问题就在对端上行或跨境链路。
 
 ## 网络传输指标查询
 
@@ -334,7 +334,7 @@ tx_loss >= 20 OR tx_media_kbps <= 20 OR tx_mtu_size < 1000 OR tx_pdelay_ms >= 20
 tx_rtt_ms >= 500 OR rx_loss >= 20 OR rx_media_kbps <= 20
 ```
 
-理想情况下，在同一个会议中，同一个 userId 仅使用同一个 sdk_addr、sfu_addr。
+理想情况下，在同一个会议中，同一个 userId 仅使用同一个 sdk_addr、sfu_addr，只要用户在同一个会议中，没有通过信令重新进房，但是 sdk_addr 却发生了变化，就说明 sdk 发生了断线重连事件，如果 sfu_addr 发生了变化，说明 sdk 发生了重调度，比断线重连更严重。
 
 
 ## 声音问题查询
@@ -416,6 +416,8 @@ tx_rtt_ms >= 500 OR rx_loss >= 20 OR rx_media_kbps <= 20
 | 其他 | `e2ee_counter`、`avsync_final`、`startRecord` / `startPlay`、`ADD` / `DELETE`、`TraceCOMError`、`log_error` | 百~万 |
 
 #### `connection_counter` —— 传输层核心指标（对标 Server 侧）
+
+如果 sdk 测上报的此类数据存在 5 秒及以上的空洞，那么很有可能出现了断线的事件，这种情况下 sfu 测大概率也收不到任何的数据，同时 sfu 会有 kUserConnected 事件的上报可以做 double check。这种情况大概率会导致订阅端观看该流的卡顿。
 
 ```
 {
@@ -509,7 +511,8 @@ local_audio   —— 推流侧音频（3A 相关，字段最多，约 130 个）
 排查链路好坏时按 Server 侧同样的思路加筛选条件，不要无条件拉全量：
 `cc_estimated_bandwidth_kbps <= 500`、`rtt_ms >= 500`、`jitter90 >= 300`、
 `predicted_transit_time_arrived_90 >= 1000`、`queueing_bytes >= 50000`、`reorder_delay >= 300`、
-`sender_loss >= 20`、`detected_mtu_bytes < 1000`、`bandwidth_limited = true`、`overusing = true`。
+`sender_loss >= 20`、`detected_mtu_bytes < 1000`、`bandwidth_limited = true`、`overusing = true`、
+`rx_kbps < 20`、 `recv_media_kbps` < 20。
 
 ## 常用查询模板
 
