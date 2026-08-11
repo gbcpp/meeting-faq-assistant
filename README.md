@@ -8,6 +8,7 @@
 - **实时流式输出**：token 级增量渲染，工具调用与结果分块展示。
 - **多会话续接**：每个浏览器标签页独立上下文，刷新不丢，可 `--resume` 续接历史对话。
 - **Markdown 渲染**：marked + DOMPurify，支持代码块、表格、列表等。
+- **亮/暗主题**：右上角按钮切换，默认暗色，选择记忆在 `localStorage`。
 
 ## 快速开始
 
@@ -22,7 +23,7 @@ npm start            # 等价于 node server.js
 
 > Jack Chen 最近的会议质量怎么样？
 
-- **Enter** 发送 · **Shift+Enter** 换行 · **＋** 新建会话（清空上下文）
+- **Enter** 发送 · **Shift+Enter** 换行 · **＋** 新建会话（清空上下文） · 右上角 **☀/☾** 切换主题
 
 ### 前置条件
 
@@ -46,7 +47,7 @@ npm start            # 等价于 node server.js
 示例：
 
 ```bash
-WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 HOST=0.0.0.0 PORT=8080 node server.js
+WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 HOST=0.0.0.0 PORT=3000 node server.js
 ```
 
 ## 架构
@@ -61,15 +62,15 @@ WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 HOST=0.0.0.0 PORT=8080
                                           逐行解析 stdout (NDJSON)
                                                         │
                           翻译为具名 SSE 事件 ◀───────────┘
-     init · delta · tool · tool_result · stderr · done · exit
+   init · delta · thinking · tool · tool_result · stderr · done · exit
                                                         │
 浏览器累积 delta 到 markdown 缓冲，marked + DOMPurify 渲染
 ```
 
 1. 浏览器以 `EventSource` 打开 `GET /api/run?prompt=...&session=<tab-id>`（SSE）。
 2. 服务端 `spawn` `claude -p <prompt> --output-format stream-json --include-partial-messages ...`，逐行解析其 NDJSON 标准输出。
-3. 每种 `claude` 事件类型被翻译成前端监听的具名 SSE 事件：`init`、`delta`（token 级文本）、`tool`（tool_use）、`tool_result`、`stderr`、`done`、`exit`。
-4. 前端（`index.html`，无框架）把 `delta` 文本累积进 markdown 缓冲区并实时渲染；工具调用与结果作为独立块展示。
+3. 每种 `claude` 事件类型被翻译成前端监听的具名 SSE 事件：`init`、`delta`（token 级文本）、`thinking`（思考信号，仅用于维持转圈状态）、`tool`（tool_use）、`tool_result`、`stderr`、`done`、`exit`。CLI 静默重试（认证过期/网络故障）的 `api_retry` 会转发为 `stderr`，避免页面只剩转圈。
+4. 前端（`index.html`，无框架）把 `delta` 文本累积进 markdown 缓冲区并实时渲染；工具调用与结果作为独立块展示，点击可展开/收起。
 
 ### 两个核心设计
 
@@ -95,9 +96,9 @@ WORK_DIR=/path/to/skill-workspace MODEL=claude-sonnet-4-6 HOST=0.0.0.0 PORT=8080
 | `sessions.json` | 会话映射持久化文件（自动生成） |
 
 
-## 启动
+## 部署（含 MCP 与 skill 配置）
 
-## 启动 mcp server
+### 启动 mcp server
 
 ```bash
 export GRAFANA_URL=https://grafana.jaco.live
@@ -105,23 +106,23 @@ export GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_xxxxxxxxxxx
 
 chmod +x mcp-grafana
 
-./mcp-grafana -t streamable-http --address 10.93.0.26:54788 -allowed-hosts 10.93.0.26:54788
+./mcp-grafana -t streamable-http --address 127.0.0.1:3000 -allowed-hosts 127.0.0.1:3000
 ```
 
-## claude 添加 mcp server
+### claude 添加 mcp server
 
 ```bash
-claude mcp add --transport http grafana-remote http://10.93.0.26:54788/mcp --scope user
+claude mcp add --transport http grafana-remote http://127.0.0.1:3000/mcp --scope user
 ```
 
-## claude 添加 skill
+### claude 添加 skill
 
 ```bash
 mkdir -p $HOME/.claude/skills/jrtc-faq
 ln -s $PWD/SKILL.md  $HOME/.claude/skills/jrtc-faq/SKILL.md
 ```
 
-## 启动 http server 提供下载服务
+### 启动 http server 提供下载服务
 
 ```bash
 mkdir -p  $PWD/shared
@@ -129,11 +130,11 @@ cd $PWD/shared
 python3 -m http.server 8081
 ```
 
-## 启动 Assistant 服务
+### 启动 Assistant 服务
 
 ```bash
-npm instal express
+npm install express
 
-HOST=10.93.0.26 PORT=8080 node server.js
+HOST=127.0.0.1 PORT=3000 node server.js
 ```
 
