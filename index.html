@@ -268,7 +268,12 @@ promptEl.addEventListener('keydown', (e) => {
 });
 
 /* ---------- 渲染工具 ---------- */
-function scrollDown() { window.scrollTo(0, document.body.scrollHeight); }
+// 粘底：默认贴着底部；用户主动上滚后停止强制滚动，滚回底部附近再恢复
+let stickToBottom = true;
+window.addEventListener('scroll', () => {
+  stickToBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+}, { passive: true });
+function scrollDown() { if (stickToBottom) window.scrollTo(0, document.body.scrollHeight); }
 function renderMd() {
   if (!mdEl) return;
   mdEl.innerHTML = DOMPurify.sanitize(marked.parse(mdBuffer));
@@ -297,6 +302,7 @@ function run() {
   autoGrow();               // 清空后收回单行高度
   promptEl.focus();
   btn.disabled = true;
+  stickToBottom = true;     // 新一轮查询：恢复粘底
 
   const turn = document.createElement('div');
   turn.className = 'turn';
