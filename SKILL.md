@@ -1,7 +1,7 @@
 ---
 name: jrtc-faq
-description: 通过 Grafana MCP 查询 JRTC 相关会议数据。当用户询问会议信息、人员信息、丢包率、带宽估计(bwe)、
-  RTT、卡顿(stall)、会话质量等会议相关信息时使用本 skill。自动选择正确的 Grafana 数据源，无需用户指定。
+description: 通过 VictoriaLogs HTTP 接口查询 JRTC 会议与人员信息，通过 Grafana MCP 查询丢包率、
+  带宽估计(bwe)、RTT、卡顿(stall)和会话质量。当用户询问这些会议相关信息时使用，自动选择查询来源。
 ---
 
 # 关键规则
@@ -10,12 +10,12 @@ description: 通过 Grafana MCP 查询 JRTC 相关会议数据。当用户询问
 
 - Qos 相关数据表查询只能用 **userId** 过滤，**不接受 userName**。
 - 用户给的是 userName（人名/昵称）时，**必须先获取 userId**，再进行后续查询。这一步不可跳过。
-- 当未指定时间点时，按时间递进(24h -> 3天 -> 7天 -> 30天)依次进行查询。
+- 用户指定时间范围时严格按该范围查询；未指定时，从最近 24h 开始，无结果再依次扩大到 3天、7天、30天。
 
 ## 时间显示
 
-- ES 的 `@timestamp`、ClickHouse 的 `op_time` 存的都是 **UTC**，
-  **查询条件里保持 UTC / Unix 时间戳不变**（`now-7d`、`toUnixTimestamp(...)` 都不要改时区），
+- VictoriaLogs 的 `_time`、ES 的 `@timestamp`、ClickHouse 的 `op_time` 存的都是 **UTC**，
+  **查询条件里保持 UTC / Unix 时间戳不变**（`_time:7d`、`now-7d`、`toUnixTimestamp(...)` 都不要改时区），
   只在最终给用户的结论里换算成**北京时间（UTC+8）**。
 - 输出一律标注「北京时间」，不要出现 `UTC` 字样。
 - 换算方式（均已验证）：
@@ -40,7 +40,7 @@ appid 表示不同环境，必须区分开，同一个人在不同环境的 user
 
 | 用途 | 数据源 | uid |
 | --- | --- | --- |
-| 会议/人员信息 | elasticsearch-beem-sdk-scheduler | `belkh7dru0ao0a` |
+| 会议/人员信息 | VictoriaLogs HTTP：`/select/logsql/query` | —（直接 curl，不经过 Grafana） |
 | 信令相关查询 | rtc-clickhouse | |
 | QoS 卡顿率指标 | rtc-clickhouse | `af84z9m0pfu9sb` |
 | SDK 侧传输/QoS 指标 | elasticsearch-rtc-sdk | delcn0iafg0zkf |
@@ -50,57 +50,81 @@ appid 表示不同环境，必须区分开，同一个人在不同环境的 user
 
 ## 会议人员信息查询
 
-通过数据源 **elasticsearch-beem-sdk-scheduler**（uid `belkh7dru0ao0a`）可以查询到会议(meetings)相关信息，
-如 meetingCode、roomId、userName、userId 这些基本的入会信息，亦包括相应的时间区间信息。
-注意：这里的"入会信息"是从配置拉取记录（`GetConfig`）推断出来的，不是真正的入会/离会事件，
-时间区间只能取记录的首末时间戳做近似 —— 详见关键坑 5。
+会议与人员标识改用 **VictoriaLogs HTTP 接口**，通过 shell 执行 curl，不需要启动浏览器。
+旧 scheduler Elasticsearch 数据源已不可用，不再使用它的索引、Grafana 代理或 `.keyword` 聚合查询这些信息。
+QoS、信令、SDK 和 SFU 指标仍使用后文的 Grafana 数据源。
 
-### 关键坑（已验证）
+### curl 查询模板
 
-1. **POST `_search` 被拒，只有两条路能走**。Grafana ES 代理对 `POST /<index>/_search`、
-   `POST /_search` 一律返回 403（空 body，不是 ES 的报错），`GET /_cat/indices` 也 403
-   （`logs_monitor` 账号无 `cluster:monitor` 权限，索引发现只能靠通配 index）。可用的两条：
-   - `POST /api/datasources/proxy/uid/<uid>/_msearch`，Header `Content-Type: application/x-ndjson`，
-     body 为 NDJSON（header 行 + query 行，**结尾必须有换行**）。多查询/需要指定 index 时用这条。
-   - `GET /api/datasources/proxy/uid/<uid>/<index>/_search?ignore_unavailable=true`
-     `&source_content_type=application%2Fjson&source=<urlencode 后的 query DSL>`
-     （2026-08-04 验证可用）。单条查询用它更省事，注意整个 JSON 必须百分号转义，
-     `@timestamp` 里的 `@` 要写成 `%40`。
+运行进程需预先配置 `VICTORIALOGS_PASSWORD` 环境变量（使用该查询账号的密码），不要将密码写入 skill 或提交到仓库。
+未配置时说明缺少凭据，不猜测密码。
 
-2. **中文名混排**：userName 形如 `周杰伦-Eddie Chen`，直接 `match: "Eddie"` 命中为 0。
-   用 `wildcard` + `userName.keyword` + `case_insensitive: true` 做子串匹配。
-   **查中文名时不要再加 `match` 兜底**：ES 对中文按单字分词，`match: "高泽"` 会把只共享一个字的
-   「高孜珺」「高港华」「高帅」「周杰伦」全捞进来（实测 37 条命中里 12 条是噪音）。
-   中文名只用 `wildcard`；英文名才需要 `match` + `wildcard` 的 should 组合。
+```bash
+curl --silent --show-error --fail-with-body \
+  --user "beem-release:${VICTORIALOGS_PASSWORD:?VICTORIALOGS_PASSWORD is required}" \
+  'http://victoria-logs.release.beemwk.com/select/logsql/query' \
+  --data-urlencode 'query=_time:7d service.name:"beem-jmeeting-sdk-scheduler" meetingCode:"0928420022"' \
+  --data-urlencode 'limit=200' \
+  --data-urlencode 'timeout=60s'
+```
 
-3. 该索引关键字段：`userName` / `userId` / `accountId` / `organizationId` / `appid` / `meetingCode` / `roomId` / `action`。
-   `req`、`resp` 是 Go struct 打印出的长文本（常被 `_ignored`），不要拿来做 keyword 聚合。
+- 当前地址为 HTTP，Basic Auth 和日志未经 TLS 加密，仅在受信任网络使用；凭据不在回答或分享文件中输出。
+- 每次根据用户要求修改 `query` 的时间和业务字段，不固定使用示例会议号。
+  始终保留时间过滤和 `service.name:"beem-jmeeting-sdk-scheduler"`；服务名可能带 Pod 后缀，不改成全值相等。
+- 使用 `--data-urlencode` 编码查询；用户输入须分别做 LogsQL 字符串转义和 shell 安全引用，不能直接拼进命令执行。
+- `limit=200` 是返回条数上限，不是人数或会议数。达到上限时按更小时间窗口分批查询并去重；
+  未取全时明确标注结果不完整。无显式排序时，不把第一条当作最新记录。
+- 网络失败、超时、HTTP 401/403 或语法错误不等于无记录；说明具体错误，不回退旧数据源。
+  若环境禁止 shell 或网络访问，报告权限限制，不尝试绕过。
 
-4. **该索引没有入会/离会事件**（已验证，prod 与 stage 均如此）：action 取值只有
-   `GetConfig` / `BatchGetConfig` / `CloseRoom` / `KickoutUser`。
-   所以「某人参加了哪些会议」只能用 `GetConfig` 记录里的 `meetingCode` 做近似
-   （含义是"客户端为该会议拉过配置"），**不等于实际入会**，也拿不到入会/离会时刻与真实时长。
+### 按字段调整 query
 
+下面每行分别替换模板中的整个 `query` 值，时间随请求调整；ID 和会议号使用精确匹配：
+
+```text
+_time:7d service.name:"beem-jmeeting-sdk-scheduler" meetingCode:="0928420022"
+_time:7d service.name:"beem-jmeeting-sdk-scheduler" roomId:="<ROOM_ID>"
+_time:7d service.name:"beem-jmeeting-sdk-scheduler" userId:="<USER_ID>"
+_time:7d service.name:"beem-jmeeting-sdk-scheduler" userName:="<完整用户名>"
+```
+
+条件间空格表示 AND，例如限定某用户、会议与环境：
+
+```text
+_time:7d service.name:"beem-jmeeting-sdk-scheduler" meetingCode:="0928420022" userId:="<USER_ID>" appid:="30003"
+```
 
 ### 标准查询：userName → userId
 
-```
-POST /api/datasources/proxy/uid/belkh7dru0ao0a/_msearch
-Content-Type: application/x-ndjson
+- 完整名字用 `userName:="<完整用户名>"`。仅有姓名片段时可用 `userName:~"<已转义的姓名片段>"`；
+  英文忽略大小写示例为 `userName:~"(?i)Eddie"`，可匹配中英文混排名字。
+  姓名中的正则特殊字符须按字面量转义，再做 LogsQL 字符串转义，避免误匹配。
+- 直接读取每条记录的 `userName`、`userId`、`accountId`、`appid` 并按组合去重，不将姓名与 ID 分别去重后配对。
+- 根据 `appid` 确认环境，可参考 `cloud.profile`，不能仅凭域名中的 release 判断环境。
+  同名但账号或环境不同的候选需列出确认，不自行合并；空 `accountId` 不足以确定身份。
+- 得到 `userId` 后可反查会议信息；查询质量时，再用该 ID、对应 `roomId` 和 appid 查询后文 QoS 数据。
 
-{"index":"*jmeeting*sdk-scheduler*"}
-{"size":0,"query":{"bool":{"filter":[{"range":{"@timestamp":{"gte":"now-7d"}}},{"wildcard":{"userName.keyword":{"value":"*<NAME>*","case_insensitive":true}}}]}},"aggs":{"users":{"terms":{"field":"userName.keyword","size":50},"aggs":{"ids":{"terms":{"field":"userId.keyword","size":20},"aggs":{"first":{"min":{"field":"@timestamp"}},"last":{"max":{"field":"@timestamp"}}}},"acct":{"terms":{"field":"accountId.keyword","size":10}},"app":{"terms":{"field":"appid.keyword","size":10}},"meet":{"terms":{"field":"meetingCode.keyword","size":30}}}}}}
-```
+### 返回字段与判定边界
 
-（英文名可在 filter 里把 wildcard 换成 `{"bool":{"should":[{"match":{"userName":"<NAME>"}},{"wildcard":{...}}],"minimum_should_match":1}}`；中文名务必只留 wildcard，见关键坑 3。）
+- 响应为 JSONL（每行一个 JSON 对象），不是 ES 的 `hits` 或 `aggregations`。
+  默认返回全部字段；用 `jq '.'` 查看，或 `jq -s '.'` 汇成数组。
+- 会议映射直接读顶层 `meetingCode`、`roomId`、`userName`、`userId`；辅助字段包括
+  `_time`、`action`、`accountId`、`organizationId`、`appid`、`cloud.profile`、`trace_id`。
+  带点字段是完整键名，例如 jq 使用 `.["cloud.profile"]`。
+- 仅需要映射时，可在 `query` 末尾追加：
 
-- 必须带 `@timestamp` range 过滤（索引跨 8000+ shard，全量扫描很慢；带 7d 过滤约 8s，按照时间递进查询(24h -> 3d -> 7d -> 30d)）。
-- 结论从 `aggregations.users.buckets` 读：每个 userName 桶下的 `ids` 即其 userId。
-- **必须看 `app` 子桶确认环境**，并在结论里标明是 prod 还是 stage —— 同一个人在两个环境是不同的
-  userId/accountId，混在一起报会出错。
-- `acct` 子桶用来判断"多个 userId 是否同一人"：accountId 相同 = 同一账号多端；
-  accountId 为空 = 未登录的游客/临时身份（常见于一人开多端灌人测试，显示名形如 `高泽-6832`）。
-- 桶数 > 1 说明同名歧义，把候选列给用户确认，不要自己猜。
+  ```text
+  | fields _time, action, meetingCode, roomId, userName, userId, accountId, organizationId, appid, cloud.profile
+  ```
+
+- `meetingCode` 保留前导零；`roomId` 和所有 ID 按字符串处理，避免大整数精度丢失。
+  同一会议号可能对应多个房间，保留记录中的实际关联与时间，不假设一一对应。
+- `req`、`resp`、`configReqHeader` 可能是 Go struct 打印文本，不是嵌套 JSON，不直接 `fromjson`。
+  `resp` 可能含 Token，不将完整响应直接粘贴到面向用户的结论或分享文件中。
+- **GetConfig 仅证明客户端拉过配置，不等于实际入会**。首末记录只能表示配置请求时间范围，不能当成入会、离会时刻或会议时长。
+  确认实际参会需结合 SDK 的 `user_joined`、成功入房信令或 QoS 上报；无记录也不能直接断言未参会或无卡顿。
+
+语法参考：[VictoriaLogs LogsQL](https://docs.victoriametrics.com/victorialogs/logsql/)。
 
 
 # QoS 查询
@@ -503,6 +527,9 @@ local_audio   —— 推流侧音频（3A 相关，字段最多，约 130 个）
 
 #### 查询模板：某人某场会议的传输质量
 
+通过 Grafana 代理 `POST /api/datasources/proxy/uid/delcn0iafg0zkf/_msearch` 发送以下 NDJSON，
+Header 为 `Content-Type: application/x-ndjson`，body 结尾必须有换行。
+
 ```
 {"index":"logs-jaco-client-self_rtc_log-v*"}
 {"size":0,"query":{"bool":{"filter":[{"range":{"@timestamp":{"gte":"now-3d","lte":"now"}}},{"term":{"columns.basic_info.jrtc_user_id":"<UID>"}},{"term":{"columns.basic_info.jrtc_room_id":"<ROOM>"}},{"term":{"columns.event":"connection_counter"}}]}},"aggs":{"rtt":{"avg":{"field":"columns.rtt_ms"}},"rtt_max":{"max":{"field":"columns.rtt_ms"}},"loss":{"avg":{"field":"columns.sender_loss"}},"bwe":{"avg":{"field":"columns.cc_estimated_bandwidth_kbps"}},"bwe_min":{"min":{"field":"columns.cc_estimated_bandwidth_kbps"}},"jitter90":{"max":{"field":"columns.jitter90"}},"queue":{"max":{"field":"columns.queueing_bytes"}}}}
@@ -564,8 +591,8 @@ LIMIT 15
   卡顿率没有统计意义，要在结论里标注"样本过小"，不能直接报 0%。
 - 想看整体概览才去掉 `stream_id` / `jrtc_room_id` / `event_type` 的 group by，
   并在结论里说明是摊薄后的平均值；排查地域问题加 `region` / `city` / `isp`。
-- **会议数会对不上**：中台 `GetConfig` 里的 meetingCode 数量通常多于这里有卡顿上报的 roomId 数量
-  （拉过配置 ≠ 真入会，见关键坑 5）。实测 8 条 GetConfig 记录对应 8 个 room，
+- **会议数会对不上**：VictoriaLogs scheduler `GetConfig` 里的 meetingCode 数量通常多于这里有卡顿上报的 roomId 数量
+  （拉过配置 ≠ 真入会，见「返回字段与判定边界」）。实测 8 条 GetConfig 记录对应 8 个 room，
   但只有 3 个 room 在这张表里有数据。差集要在结论里说明是"无上报"，不要说成"无卡顿"。
 
 # 摸索新指标时的规矩（避免几十次无效调用）
@@ -576,9 +603,9 @@ LIMIT 15
    （`$.panels[*].title` 定位面板、`$.templating.list` 看变量语义）。
    **不要直接 `get_dashboard_panel_queries` 拉整个看板** —— 大看板一次 60K+ 字符，会被截断存盘。
    确认目标面板后再按 `panelId` 取单个面板的查询。
-2. ES 摸字段用 `_field_caps` 但**必须显式列字段名**（`?fields=userName,userId,roomId`）。
+2. QoS 的 ES 数据源摸字段用 `_field_caps` 但**必须显式列字段名**（例如 SDK 的 `?fields=columns.basic_info.jrtc_user_id,columns.basic_info.jrtc_room_id`）。
    用 `fields=*name*` 这种通配会返回几千个支付/k8s/payment 无关字段，纯浪费。
-3. **数据源的 `jsonData.index` 不可信**，名字和实际索引经常不符（见关键坑 1）。
+3. **数据源的 `jsonData.index` 不可信**，名字和实际索引经常不符。
    与其信配置，不如用通配 index 直接搜一条样本，从 `_index` 反查真实索引名。
 4. 想知道 ClickHouse 有什么表/列，直接 `SHOW TABLES FROM <db>` 和 `system.columns`，
    比翻看板快得多。
