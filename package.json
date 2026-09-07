@@ -1,5 +1,5 @@
 {
-  "name": "claude-web",
+  "name": "codex-web",
   "version": "1.0.0",
   "description": "",
   "main": "server.js",

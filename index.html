@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Code Web</title>
+<title>Codex Web</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 <style>
@@ -393,7 +393,8 @@ function run() {
     renderMd();
     const el = document.createElement('div');
     el.className = d.is_error ? 'err' : 'meta';
-    el.textContent = '[完成 ' + (d.duration_ms/1000).toFixed(1) + 's | $' + (d.cost_usd||0).toFixed(4) + ']';
+    const tokens = (d.usage?.input_tokens || 0) + (d.usage?.output_tokens || 0);
+    el.textContent = '[完成 ' + (d.duration_ms/1000).toFixed(1) + 's | ' + tokens + ' tokens]';
     turn.appendChild(el); scrollDown();
   });
 

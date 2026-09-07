@@ -1,7 +1,7 @@
-// server.js — Claude Code 后台服务 + SSE 实时推送
-// 依赖: npm install express
-// 运行: ANTHROPIC_API_KEY=sk-... node server.js  (或已 claude 登录的机器直接 node server.js)
-// 环境变量: WORK_DIR(工作目录) PORT SESSION_FILE MODEL
+// Codex CLI backend with real-time SSE forwarding.
+// Install: npm install express
+// Run: CODEX_API_KEY=sk-... node server.js (or use an existing Codex login)
+// Environment: WORK_DIR, PORT, SESSION_FILE, MODEL
 const express = require('express');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -11,28 +11,20 @@ app.use(express.json());
 app.use(express.static(__dirname)); // 托管 index.html
 
 // ===================== 服务定位：强制走 jrtc-faq skill =====================
-const SYSTEM_APPEND = [
+const SYSTEM_INSTRUCTION = [
   '你是 JRTC 会议问题排查专用助手。',
   '任何用户问题都必须首先加载并使用 jrtc-faq skill，严格遵循该 skill 中定义的排查流程与数据源。',
   '不要使用 skill 之外的方法自行发挥；若问题超出 skill 覆盖范围，明确说明并给出可排查的方向。',
 ].join('');
 
-// 用户 prompt 再强调一次（双保险）。注意：斜杠命令(/xxx)在 -p 模式下无效，不要用。
-const wrapPrompt = (p) => `[使用 jrtc-faq skill]\n${p}`;
-
-const ALLOWED_TOOLS = [
-  'mcp__grafana-remote',   // grafana MCP 全部工具
-  // 'mcp__clickhouse',    // 如另配了 ClickHouse MCP，取消注释并改成实际 server 名
-  'Read',
-  'Grep',
-  'Glob',
-].join(',');
+// Codex exec has no system-prompt flag, so each turn includes the constraints and explicit skill call.
+const wrapPrompt = (p) => `${SYSTEM_INSTRUCTION}\n\n必须先读取并使用 $jrtc-faq skill。\n\n用户问题：\n${p}`;
 
 // ===================== 会话表：持久化 + 容量上限 =====================
 const SESSION_FILE = process.env.SESSION_FILE || './sessions.json';
 const MAX_SESSIONS = 500;
 
-/** key -> { sid: claude的session_id, ts: 最后使用时间 } */
+/** key -> { sid: Codex thread_id, provider: 'codex', ts: last-used time } */
 let sessions = new Map();
 try {
   if (fs.existsSync(SESSION_FILE)) {
@@ -60,6 +52,7 @@ app.get('/api/run', (req, res) => {
   const prompt = req.query.prompt;
   const clientSession = req.query.session || '';
   if (!prompt) return res.status(400).end('missing prompt');
+  const startedAt = Date.now();
 
   // --- SSE 头 ---
   res.writeHead(200, {
@@ -71,28 +64,23 @@ app.get('/api/run', (req, res) => {
   const send = (event, data) =>
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  // --- 组装 claude 命令 ---
-  const args = [
-    '-p', wrapPrompt(prompt),
-    '--append-system-prompt', SYSTEM_APPEND,   // 系统级强制 skill，比 user prompt 权重高
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--include-partial-messages',
-    '--permission-mode', 'acceptEdits',
-    '--allowedTools', ALLOWED_TOOLS,
-  ];
-  if (process.env.MODEL) args.push('--model', process.env.MODEL);  // 可选：MODEL=claude-sonnet-4-6 降本
-
+  // --- Build the Codex command ---
+  const args = ['--sandbox', 'read-only', '--ask-for-approval', 'never'];
+  if (process.env.MODEL) args.push('--model', process.env.MODEL);
+  args.push('exec');
   const entry = sessions.get(clientSession);
-  if (entry && entry.sid) args.push('--resume', entry.sid);
+  if (entry?.provider === 'codex' && entry.sid) args.push('resume');
+  args.push('--json');
+  if (entry?.provider === 'codex' && entry.sid) args.push(entry.sid);
+  args.push(wrapPrompt(prompt));
 
-  const child = spawn('claude', args, {
+  const child = spawn('codex', args, {
     cwd: process.env.WORK_DIR || process.cwd(),
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],          // 关闭 stdin：消除 "no stdin data in 3s" 警告
   });
 
-  // --- 逐行解析 NDJSON 并转发 ---
+  // --- Parse and forward JSONL ---
   let buf = '';
   child.stdout.on('data', (chunk) => {
     buf += chunk.toString();
@@ -105,57 +93,69 @@ app.get('/api/run', (req, res) => {
       try { msg = JSON.parse(line); } catch { continue; }
 
       switch (msg.type) {
-        case 'system': // 处理 init 与 api_retry，其它 system 事件（hook/状态）忽略
-          if (msg.subtype === 'init') {
-            if (clientSession) {
-              sessions.set(clientSession, { sid: msg.session_id, ts: Date.now() });
-              persistSessions();
-            }
-            send('init', { session_id: msg.session_id, model: msg.model });
-          } else if (msg.subtype === 'api_retry') {
-            // 认证过期/网络故障时 CLI 会静默重试，转发出来避免页面只剩转圈
-            send('stderr', { text: `API 重试 ${msg.attempt}/${msg.max_retries}: ${msg.error_status || ''} ${msg.error || ''}` });
+        case 'thread.started':
+          if (clientSession) {
+            sessions.set(clientSession, { sid: msg.thread_id, provider: 'codex', ts: Date.now() });
+            persistSessions();
           }
+          send('init', { session_id: msg.thread_id, model: process.env.MODEL || 'default' });
           break;
-        case 'stream_event': { // token 级增量（--include-partial-messages）
-          const delta = msg.event?.delta;
-          if (delta?.type === 'text_delta') send('delta', { text: delta.text });
-          else if (delta?.type === 'thinking_delta') send('thinking', {}); // 仅作信号，前端用于维持"思考中"状态
+        case 'turn.started':
+          send('thinking', {});
           break;
-        }
-        case 'assistant': { // 完整 assistant 消息（含工具调用）
-          for (const block of msg.message?.content || []) {
-            if (block.type === 'tool_use')
-              send('tool', { name: block.name, input: block.input });
-            // 文本已通过 delta 推过，这里只发工具事件，避免重复
-          }
-          break;
-        }
-        case 'user': { // 工具执行结果
-          for (const block of msg.message?.content || []) {
-            if (block.type === 'tool_result') {
-              const text = Array.isArray(block.content)
-                ? block.content.map((c) => c.text || '').join('')
-                : String(block.content ?? '');
-              send('tool_result', { text: text.slice(0, 2000) }); // 截断避免撑爆页面
-            }
+        case 'item.started': {
+          const item = msg.item || {};
+          if (item.type === 'reasoning') {
+            send('thinking', {});
+          } else if (item.type === 'command_execution') {
+            send('tool', { name: 'Shell', input: { command: item.command } });
+          } else if (item.type === 'mcp_tool_call') {
+            send('tool', {
+              name: [item.server, item.tool].filter(Boolean).join('/') || 'MCP',
+              input: item.arguments || {},
+            });
+          } else if (item.type === 'web_search') {
+            send('tool', { name: 'WebSearch', input: { query: item.query } });
+          } else if (item.type === 'file_change') {
+            send('tool', { name: 'FileChange', input: { changes: item.changes } });
           }
           break;
         }
-        case 'result': // 最终结果
+        case 'item.completed': {
+          const item = msg.item || {};
+          if (item.type === 'agent_message') {
+            send('delta', { text: item.text || '' });
+          } else if (item.type === 'command_execution') {
+            send('tool_result', { text: String(item.aggregated_output || '').slice(0, 2000) });
+          } else if (item.type === 'mcp_tool_call') {
+            const result = item.result ?? item.error ?? '';
+            const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+            send('tool_result', { text: text.slice(0, 2000) });
+          } else if (item.type === 'reasoning') {
+            send('thinking', {});
+          }
+          break;
+        }
+        case 'turn.completed':
           send('done', {
-            result: msg.result,
-            cost_usd: msg.total_cost_usd,
-            duration_ms: msg.duration_ms,
-            is_error: msg.is_error,
+            duration_ms: Date.now() - startedAt,
+            usage: msg.usage || {},
+            is_error: false,
           });
+          break;
+        case 'turn.failed':
+          send('stderr', { text: msg.error?.message || msg.error || 'Codex execution failed' });
+          send('done', { duration_ms: Date.now() - startedAt, usage: {}, is_error: true });
+          break;
+        case 'error':
+          send('stderr', { text: msg.message || 'Codex CLI error' });
           break;
       }
     }
   });
 
   child.stderr.on('data', (d) => send('stderr', { text: d.toString() }));
-  child.on('error', (e) => { send('stderr', { text: '启动 claude 失败: ' + e.message }); });
+  child.on('error', (e) => { send('stderr', { text: 'Failed to start codex: ' + e.message }); });
   child.on('close', (code) => { send('exit', { code }); res.end(); });
   req.on('close', () => child.kill('SIGTERM')); // 浏览器断开就杀进程
 });
