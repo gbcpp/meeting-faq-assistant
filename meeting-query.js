@@ -78,7 +78,7 @@ function buildQuery(args, now = Date.now()) {
   return { query: `${filters.join(' ')} | sort by (_time) desc | fields ${FIELDS.join(', ')}`, limit, range };
 }
 
-function createMeetingQuery({ username, password, fetchImpl = fetch, now = Date.now, isSensitive = () => false }) {
+function createMeetingQuery({ username, password, fetchImpl = fetch, now = Date.now, sanitize = value => value }) {
   return async args => {
     let request;
     try { request = buildQuery(args, now()); }
@@ -93,9 +93,8 @@ function createMeetingQuery({ username, password, fetchImpl = fetch, now = Date.
         body: new URLSearchParams({ query: request.query, limit: String(request.limit), timeout: '60s' }),
       });
       if (!response.ok) {
-        await response.body?.cancel();
-        return { error: response.status === 401 || response.status === 403
-          ? 'Query service authentication failed.' : 'Query service request failed.' };
+        const detail = sanitize((await response.text()) || response.statusText);
+        return { error: `Query service request failed (${response.status}): ${detail}` };
       }
       const chunks = [];
       let bytes = 0;
@@ -111,11 +110,12 @@ function createMeetingQuery({ username, password, fetchImpl = fetch, now = Date.
       // Project again locally; never trust the upstream to honor the requested fields.
       const records = rows.slice(0, request.limit).map(row => Object.fromEntries(FIELDS
         .filter(field => typeof row[field] === 'string' && row[field].length <= 1024)
-        .map(field => [field, isSensitive(row[field]) ? '[REDACTED]' : row[field]])));
+        .map(field => [field, sanitize(row[field], field)])));
       return { records, count: records.length, possiblyTruncated: rows.length >= request.limit,
         range: request.range, evidence: 'Configuration records only; verify attendance with SDK or QoS data.' };
-    } catch {
-      return { error: controller.signal.aborted ? 'Query service timed out.' : 'Query service unavailable or returned an invalid response.' };
+    } catch (error) {
+      const detail = sanitize(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+      return { error: controller.signal.aborted ? 'Query service timed out.' : detail };
     } finally {
       clearTimeout(timer);
     }

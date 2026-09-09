@@ -12,8 +12,8 @@ const { app, start } = require('./server');
 const NOW = Date.parse('2026-09-07T12:00:00Z');
 const username = 'test-service-account';
 const password = 'test-secret-928374';
-const privacy = createPrivacyFilter([username, password, `${username}:${password}`]);
-const options = { username, password, now: () => NOW, isSensitive: privacy.isSensitive };
+const privacy = createPrivacyFilter([password, `${username}:${password}`]);
+const options = { username, password, now: () => NOW, sanitize: privacy.sanitize };
 
 test('query builder bounds time and escapes literal filters', () => {
   const request = buildQuery({ meetingCode: '0928420022', userNameContains: 'Eddie.*" | limit 999', limit: 10 }, NOW);
@@ -92,15 +92,16 @@ test('empty success is distinct from sanitized auth, network and parsing failure
   assert.equal(called, false);
 });
 
-test('agent environment strips all log credentials; output guard covers known encodings', () => {
+test('only authentication values are redacted from the agent environment and output', () => {
   assert.deepEqual(agentEnvironment({ PATH: '/bin', CODEX_API_KEY: 'model-key', VICTORIALOGS_PASSWORD: password,
     VICTORIALOGS_TOKEN: 'other', VICTORIALOGS_USERNAME: username, VICTORIALOGS_NETRC_FILE: '/secret' }),
-  { PATH: '/bin', CODEX_API_KEY: 'model-key' });
-  for (const secret of [password, username, Buffer.from(`${username}:${password}`).toString('base64'),
-    password.split('').join(' '), 'jrtc-faq', 'SKILL.md', 'jrtc-\nfaq', 'Authorization: Basic abc', 'token=unknown-secret']) {
-    assert.notEqual(privacy.filter(secret), secret);
-  }
-  assert.equal(privacy.filter('Eddie，userId=abc，会议 0928420022，RTT 21 ms。'), 'Eddie，userId=abc，会议 0928420022，RTT 21 ms。');
+  { PATH: '/bin', CODEX_API_KEY: 'model-key', VICTORIALOGS_USERNAME: username });
+  for (const secret of [password, Buffer.from(`${username}:${password}`).toString('base64'),
+    'Authorization: Basic abc', 'token=unknown-secret']) assert.ok(privacy.filter(secret).includes('[REDACTED]'));
+  assert.equal(privacy.filter('jrtc-faq SKILL.md meeting_lookup query=meetingCode'),
+    'jrtc-faq SKILL.md meeting_lookup query=meetingCode');
+  assert.deepEqual(privacy.sanitize({ token: 'abc', password, query: 'meetingCode=1', skill: 'jrtc-faq' }),
+    { token: '[REDACTED]', password: '[REDACTED]', query: 'meetingCode=1', skill: 'jrtc-faq' });
 });
 
 test('real MCP client can initialize, list and call the loopback query tool', async t => {
@@ -130,17 +131,23 @@ test('real MCP client can initialize, list and call the loopback query tool', as
   assert.equal(rejectedHost, 403);
 });
 
-test('web serves only the UI and withholds raw events, internal instructions and split secrets', async t => {
+test('web exposes tool details and skill references while redacting authentication values', async t => {
   app.locals.meetingMcpUrl = 'http://127.0.0.1:12345/mcp';
   app.locals.privacy = privacy;
-  app.locals.agentEnv = agentEnvironment({ PATH: '/bin', VICTORIALOGS_PASSWORD: password });
+  app.locals.agentEnv = agentEnvironment({ PATH: '/bin', VICTORIALOGS_USERNAME: username, VICTORIALOGS_PASSWORD: password });
   let answer = 'Eddie 最近会议网络正常。';
   app.locals.spawnAgent = (command, args, config) => {
     assert.equal(command, 'codex');
     assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
     assert.equal(args[args.indexOf('--ask-for-approval') + 1], 'never');
     assert.ok(args.includes('mcp_servers.meeting_lookup.url="http://127.0.0.1:12345/mcp"'));
+    const approvalOverride = 'mcp_servers.grafana-remote.tools.grafana_api_request.approval_mode="approve"';
+    assert.deepEqual(args.filter(arg => arg.includes('approval_mode=')), [approvalOverride]);
+    assert.equal(args[args.indexOf(approvalOverride) - 1], '-c');
+    assert.ok(args.indexOf(approvalOverride) < args.indexOf('exec'));
+    assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
     assert.equal(config.env.VICTORIALOGS_PASSWORD, undefined);
+    assert.equal(config.env.VICTORIALOGS_USERNAME, username);
     assert.ok(!args.join(' ').includes(password));
     const child = new EventEmitter();
     child.stdout = new PassThrough();
@@ -148,9 +155,12 @@ test('web serves only the UI and withholds raw events, internal instructions and
     child.kill = () => {};
     setImmediate(() => {
       const events = [
-        { type: 'item.started', item: { type: 'command_execution', command: password } },
-        { type: 'item.completed', item: { type: 'command_execution', aggregated_output: 'unknown-upstream-token' } },
-        { type: 'item.completed', item: { type: 'mcp_tool_call', result: { token: password } } },
+        { type: 'item.started', item: { id: 'cmd-1', type: 'command_execution', command: password } },
+        { type: 'item.completed', item: { id: 'cmd-1', type: 'command_execution', aggregated_output: 'command completed' } },
+        { type: 'item.started', item: { id: 'mcp-1', type: 'mcp_tool_call', server: 'meeting_lookup', tool: 'meeting_lookup', arguments: { token: password } } },
+        { type: 'item.completed', item: { id: 'mcp-1', type: 'mcp_tool_call', server: 'meeting_lookup', tool: 'meeting_lookup', result: { token: password } } },
+        { type: 'item.started', item: { id: 'mcp-2', type: 'mcp_tool_call', server: 'grafana-remote', tool: 'grafana_api_request', arguments: { query: 'secret query' } } },
+        { type: 'item.completed', item: { id: 'mcp-2', type: 'mcp_tool_call', server: 'grafana-remote', tool: 'grafana_api_request', result: { token: 'unknown-upstream-token' } } },
         { type: 'item.completed', item: { type: 'agent_message', text: answer.slice(0, 5) } },
         { type: 'item.completed', item: { type: 'agent_message', text: answer.slice(5) } },
         { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 5 } },
@@ -173,15 +183,21 @@ test('web serves only the UI and withholds raw events, internal instructions and
   }
   const valid = await (await fetch(`${base}/api/run?prompt=Eddie`)).text();
   assert.ok(valid.includes(answer));
-  assert.ok(!valid.includes('event: tool'));
+  assert.ok(valid.includes('event: tool'));
+  assert.ok(valid.includes('event: tool_result'));
+  assert.ok(valid.includes('meeting_lookup'));
+  assert.ok(valid.includes('grafana_api_request'));
+  assert.ok(valid.includes('secret query'));
+  assert.ok(valid.includes('[REDACTED]'));
   assert.ok(!valid.includes('unknown-upstream-token'));
   assert.ok(!valid.includes(password));
-  for (const sensitive of [password, '使用 jrtc-faq skill 查询。']) {
-    answer = sensitive;
-    const output = await (await fetch(`${base}/api/run?prompt=Eddie`)).text();
-    assert.ok(!output.includes(sensitive));
-    assert.ok(output.includes('已隐藏'));
-  }
+  answer = '使用 jrtc-faq skill，通过 meeting_lookup 查询。';
+  const skillOutput = await (await fetch(`${base}/api/run?prompt=Eddie`)).text();
+  assert.ok(skillOutput.includes(answer));
+  answer = `查询密码为 ${password}`;
+  const secretOutput = await (await fetch(`${base}/api/run?prompt=Eddie`)).text();
+  assert.ok(!secretOutput.includes(password));
+  assert.ok(secretOutput.includes('[REDACTED]'));
 });
 
 test('service startup wires an internal MCP listener without passing credentials to the agent', async t => {
@@ -198,7 +214,7 @@ test('service startup wires an internal MCP listener without passing credentials
   t.after(() => new Promise(resolve => { listener.close(resolve); listener.closeAllConnections(); }));
   assert.equal(process.env.VICTORIALOGS_PASSWORD, undefined);
   assert.equal(app.locals.agentEnv.VICTORIALOGS_PASSWORD, undefined);
-  assert.equal(app.locals.agentEnv.VICTORIALOGS_USERNAME, undefined);
+  assert.equal(app.locals.agentEnv.VICTORIALOGS_USERNAME, username);
   assert.match(app.locals.meetingMcpUrl, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
   assert.notEqual(Number(new URL(app.locals.meetingMcpUrl).port), listener.address().port);
   const client = new Client({ name: 'startup-test', version: '1.0.0' });
